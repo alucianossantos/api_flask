@@ -1,70 +1,58 @@
 from flask_restful import Resource, reqparse
 from models.hotel import HotelModel
 from flask_jwt_extended import jwt_required
+from resources.filtros import *
 import sqlite3
 
-
-def normalize_params(cidade=None, estrelas_min=0, estrelas_max=5, diaria_min=0, diaria_max=100000000, limit=50, offset=0, **dados):
-    if cidade:
-        return {
-            "cidade": cidade,
-            "estrelas_min": estrelas_min,
-            "estrelas_max": estrelas_max,
-            "diaria_min": diaria_min,
-            "diaria_max": diaria_max,
-            "limit": limit,
-            "offset": offset
-        }
-    return {
-        "estrelas_min": estrelas_min,
-        "estrelas_max": estrelas_max,
-        "diaria_min": diaria_min,
-        "diaria_max": diaria_max,
-        "limit": limit,
-        "offset": offset
-    }
-
-
 path_params = reqparse.RequestParser()
-path_params.add_argument('cidade', type=str)
-path_params.add_argument('estrelas_min', type=float)
-path_params.add_argument('estrelas_max', type=float)
-path_params.add_argument('diaria_min', type=float)
-path_params.add_argument('diaria_max', type=float)
-path_params.add_argument('limit', type=float)
-path_params.add_argument('offset', type=float)
+path_params.add_argument('cidade', type=str, location='args')
+path_params.add_argument('estrelas_min', type=float, location='args')
+path_params.add_argument('estrelas_max', type=float, location='args')
+path_params.add_argument('diaria_min', type=float, location='args')
+path_params.add_argument('diaria_max', type=float, location='args')
+path_params.add_argument('limit', type=int, location='args')
+path_params.add_argument('offset', type=int, location='args')
+path_params.add_argument('order_by', type=str, location='args')
 
 class Hoteis(Resource):
     def get(self):
-        connection = sqlite3.connect('./instance/banco.db')
-        cursor = connection.cursor()
-        dados = path_params.parse_args()
-        dados_validos = {chave: dados[chave] for chave in dados if dados[chave] is not None}
-        params = normalize_params(**dados_validos)
+        try:
+            connection = sqlite3.connect('./instance/banco.db')
+            cursor = connection.cursor()
 
-        if not params.get('cidade'):
-            sql = "SELECT * FROM hoteis WHERE (estrelas > ? AND estrelas < ?) AND (diaria > ? AND diaria < ?) LIMIT ? OFFSET ?"
-            valores = tuple([params[chave] for chave in params])
-            resultado = cursor.execute(sql, valores)
-        else:
-            sql = "SELECT * FROM hoteis WHERE cidade = ? AND (estrelas > ? AND estrelas < ?) AND (diaria > ? AND diaria < ?) LIMIT ? OFFSET ?"
-            valores = tuple([params[chave] for chave in params])
-            resultado = cursor.execute(sql, valores)
-        
-        hoteis = []
-        for linha in resultado:
-            hoteis.append(
-                {
-                    'hotel_id': linha[0],
-                    'nome': linha[1],
-                    'estrelas': linha[2],
-                    'diaria': linha[3],
-                    'cidade': linha[4]
-                }
-            )
-        return {'hoteis': hoteis}
+            dados = path_params.parse_args()
+            dados_validos = {chave: dados[chave] for chave in dados if dados[chave] is not None}
+            params = normalize_params(**dados_validos)
+        except Exception as e:
+            return {'message': f'Erro na conexão com o servidor: {e}'}, 500
 
-        return {'hoteis': [hotel.json() for hotel in HotelModel.query.all()]}
+        try:
+            if not params.get('cidade'):
+                sql = consulta_sem_cidade(params)
+                resultado = cursor.execute(sql)
+            else:
+                sql = consulta_com_cidade(params)
+                resultado = cursor.execute(sql)
+            
+            hoteis = []
+            for linha in resultado:
+                hoteis.append(
+                    {
+                        'hotel_id': str(linha[0]).lower(),
+                        'nome': str(linha[1]).capitalize(),
+                        'estrelas': linha[2],
+                        'diaria': linha[3],
+                        'cidade': str(linha[4]).capitalize(),
+                        'site_id': linha[5]
+                    }
+                )
+            return {'hoteis': hoteis}
+        except Exception as e:
+            return {'message': f'Erro no banco: {e}'}, 500
+        finally:
+            connection.close()
+
+        # return {'hoteis': [hotel.json() for hotel in HotelModel.query.all()]}
 
 class Hotel(Resource):
     atributos = reqparse.RequestParser()
@@ -72,6 +60,7 @@ class Hotel(Resource):
     atributos.add_argument('estrelas', type=float, required=True, help="O campo 'estrelas' não pode ser nulo")
     atributos.add_argument('diaria', type=float, required=True, help="O campo 'diaria' não pode ser nulo")
     atributos.add_argument('cidade', type=str, required=True, help="O campo 'cidade' não pode ser nulo")
+    atributos.add_argument('site_id', type=int, required=True, help="Todo hotel deve estar ligado a um site")
 
     def get(self, hotel_id):
         hotel = HotelModel.find_hotel(hotel_id)
